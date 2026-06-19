@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DomainRadar - 子域名扫描</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="bg-glow"></div>
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="radar-logo">
+        <div class="radar-sweep"></div>
+        <div class="radar-ring r1"></div>
+        <div class="radar-ring r2"></div>
+        <div class="radar-ring r3"></div>
+        <div class="radar-dot d1"></div>
+        <div class="radar-dot d2"></div>
+        <div class="radar-dot d3"></div>
+      </div>
+      <div class="brand-text">
+        <h1>DomainRadar</h1>
+        <p>多源子域名雷达 · Certificate Transparency · Passive DNS · Bruteforce</p>
+      </div>
+    </div>
+    <a class="ghlink" href="https://github.com/zhouzdx/DomainRadar" target="_blank" rel="noopener">
+      <svg viewBox="0 0 16 16" width="18" height="18" aria-hidden="true">
+        <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8a8 8 0 005.47 7.59c.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+      </svg>
+      <span>GitHub</span>
+    </a>
+  </header>
+
+  <main class="container">
+    <section class="panel input-panel">
+      <form id="scanForm" autocomplete="off">
+        <label class="field-label">目标主域名</label>
+        <div class="input-row">
+          <input
+            id="domainInput"
+            type="text"
+            placeholder="example.com"
+            spellcheck="false"
+            autocapitalize="off"
+            required
+          />
+          <button id="scanBtn" type="submit">
+            <span class="btn-label">开始扫描</span>
+            <span class="btn-spinner" aria-hidden="true"></span>
+          </button>
+        </div>
+        <div class="options">
+          <label class="check">
+            <input type="checkbox" id="optBruteforce" />
+            <span>启用 DNS 暴力破解 <em>(慢，~280 词)</em></span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="optResolve" checked />
+            <span>解析 A / AAAA 记录</span>
+          </label>
+        </div>
+        <div id="errorBox" class="error-box hidden"></div>
+      </form>
+    </section>
+
+    <section class="panel sources-panel hidden" id="sourcesPanel">
+      <div class="panel-header">
+        <h2>数据源</h2>
+        <span class="meta" id="sourcesMeta"></span>
+      </div>
+      <div class="sources-grid" id="sourcesGrid"></div>
+    </section>
+
+    <section class="panel summary-panel hidden" id="summaryPanel">
+      <div class="summary-grid">
+        <div class="stat">
+          <div class="stat-label">目标</div>
+          <div class="stat-value" id="statDomain">-</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">唯一子域</div>
+          <div class="stat-value accent-cyan" id="statTotal">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">解析存活</div>
+          <div class="stat-value accent-green" id="statAlive">0</div>
+        </div>
+        <div class="stat">
+          <div class="stat-label">耗时</div>
+          <div class="stat-value" id="statElapsed">-</div>
+        </div>
+      </div>
+      <div class="downloads" id="downloads">
+        <a class="dl" id="dlTxt" href="#">.txt 全部</a>
+        <a class="dl" id="dlAlive" href="#">.alive.txt 存活</a>
+        <a class="dl" id="dlJson" href="#">.json 完整</a>
+      </div>
+    </section>
+
+    <section class="panel results-panel hidden" id="resultsPanel">
+      <div class="panel-header">
+        <h2>扫描结果</h2>
+        <div class="filter-row">
+          <input id="filterInput" type="text" placeholder="过滤 (子串匹配)" />
+          <label class="check inline">
+            <input type="checkbox" id="filterAlive" />
+            <span>仅存活</span>
+          </label>
+          <span class="meta" id="filterMeta"></span>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th class="col-idx">#</th>
+              <th class="col-host">子域名</th>
+              <th class="col-ips">IP 地址</th>
+              <th class="col-status">状态</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+        <div class="empty-state hidden" id="emptyState">无匹配结果</div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>DomainRadar v1.0 · 仅扫描你拥有授权的目标</span>
+  </footer>
+
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
