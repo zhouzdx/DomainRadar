@@ -123,6 +123,8 @@ def _stream_scan(domain: str, use_bruteforce: bool, do_resolve: bool):
         "subdomains": result.sorted_subdomains(),
         "per_source": {k: sorted(v) for k, v in result.per_source.items()},
         "resolved": result.resolved,
+        "hijacked": result.hijacked,
+        "wildcard_ips": sorted(result.wildcard_ips),
     }
     _RESULT_CACHE[job_id] = final
     # Trim cache to last 20 jobs.
@@ -182,10 +184,12 @@ def api_download(job_id: str, fmt: str):
             headers={"Content-Disposition": f'attachment; filename="{domain}.txt"'},
         )
     if fmt == "alive":
+        wildcard = set(data.get("wildcard_ips") or [])
         lines = []
         for host, ips in sorted((data.get("resolved") or {}).items()):
-            if ips:
-                lines.append(f"{host}\t{','.join(ips)}")
+            real = [ip for ip in (ips or []) if ip not in wildcard]
+            if real:
+                lines.append(f"{host}\t{','.join(real)}")
         body = "\n".join(lines) + ("\n" if lines else "")
         return Response(
             body,

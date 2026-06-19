@@ -9,6 +9,7 @@ const state = {
   domain: null,
   subdomains: [],   // [{host, ips: []}]
   resolving: true,
+  wildcardIps: new Set(),
 };
 
 const els = {
@@ -35,6 +36,8 @@ const els = {
   filterAlive:  $('filterAlive'),
   filterMeta:   $('filterMeta'),
   emptyState:   $('emptyState'),
+  hijackBox:    $('hijackBox'),
+  hijackDetail: $('hijackDetail'),
 };
 
 // ---------- Helpers ----------
@@ -55,12 +58,15 @@ function setLoading(loading) {
 
 function resetUI() {
   clearError();
+  els.hijackBox.classList.add('hidden');
+  els.hijackDetail.textContent = '';
   els.sourcesPanel.classList.add('hidden');
   els.summaryPanel.classList.add('hidden');
   els.resultsPanel.classList.add('hidden');
   els.sourcesGrid.innerHTML = '';
   els.resultsBody.innerHTML = '';
   state.subdomains = [];
+  state.wildcardIps = new Set();
 }
 
 function makeSourceCard(name) {
@@ -99,6 +105,37 @@ function onSourceStart(data) {
   // Card is already created in onStart - mark as querying.
   const card = els.sourcesGrid.querySelector(`[data-source="${CSS.escape(data.source)}"]`);
   if (card) card.classList.add('querying');
+}
+
+function onWildcardStart() {
+  const card = document.createElement('div');
+  card.className = 'source-card querying';
+  card.dataset.source = '__wildcard__';
+  card.innerHTML = `
+    <div class="source-name"><span class="dot"></span>劫持检测</div>
+    <div class="source-count">…</div>
+    <div class="source-status">探测随机子域</div>
+  `;
+  els.sourcesGrid.appendChild(card);
+}
+
+function onWildcardDone(data) {
+  const card = els.sourcesGrid.querySelector('[data-source="__wildcard__"]');
+  if (card) {
+    card.classList.remove('querying');
+    card.classList.add(data.hijacked ? 'failed' : 'done');
+    card.querySelector('.source-count').textContent = data.hijacked ? '!!' : 'OK';
+    card.querySelector('.source-status').textContent = data.hijacked
+      ? `${data.ips.length} 个伪造 IP`
+      : '无劫持';
+  }
+  state.wildcardIps = new Set(data.ips || []);
+  if (data.hijacked) {
+    els.hijackBox.classList.remove('hidden');
+    els.hijackDetail.textContent =
+      `所在网络对该域返回伪造 IP: ${data.ips.join(', ')}。 ` +
+      `Bruteforce 结果中匹配这些 IP 的条目已自动过滤；其他源的解析结果中这些 IP 标记为"可疑"。`;
+  }
 }
 
 function onSourceDone(data) {
@@ -143,6 +180,9 @@ function onComplete(data) {
   els.dlAlive.href = `/api/result/${data.job_id}/download/alive`;
   els.dlJson.href  = `/api/result/${data.job_id}/download/json`;
 
+  // Refresh wildcard set from final payload (covers refresh / direct API hits).
+  state.wildcardIps = new Set(data.wildcard_ips || []);
+
   // Build subdomain list
   state.subdomains = data.subdomains.map((host) => ({
     host,
@@ -180,18 +220,34 @@ function renderTable() {
   const frag = document.createDocumentFragment();
   rows.forEach((row, idx) => {
     const tr = document.createElement('tr');
+    const realIps    = row.ips.filter((ip) => !state.wildcardIps.has(ip));
+    const suspectIps = row.ips.filter((ip) =>  state.wildcardIps.has(ip));
+
     let badge;
     if (!state.resolving) {
       badge = '<span class="badge unknown">未解析</span>';
-    } else if (row.ips.length > 0) {
+    } else if (realIps.length > 0) {
       badge = '<span class="badge alive">ALIVE</span>';
+    } else if (suspectIps.length > 0) {
+      badge = '<span class="badge suspect">可疑</span>';
     } else {
       badge = '<span class="badge dead">无记录</span>';
     }
+
+    let ipsHtml;
+    if (row.ips.length === 0) {
+      ipsHtml = '—';
+    } else {
+      const parts = [];
+      if (realIps.length)    parts.push(escapeHtml(realIps.join(', ')));
+      if (suspectIps.length) parts.push(`<span class="badge suspect">劫持: ${escapeHtml(suspectIps.join(', '))}</span>`);
+      ipsHtml = parts.join(' ');
+    }
+
     tr.innerHTML = `
       <td class="col-idx">${idx + 1}</td>
       <td class="col-host">${escapeHtml(row.host)}</td>
-      <td class="col-ips">${row.ips.length ? escapeHtml(row.ips.join(', ')) : '—'}</td>
+      <td class="col-ips">${ipsHtml}</td>
       <td class="col-status">${badge}</td>
     `;
     frag.appendChild(tr);
@@ -227,11 +283,13 @@ els.form.addEventListener('submit', (e) => {
   const es = new EventSource(`/api/scan?${params.toString()}`);
   state.evtSource = es;
 
-  es.addEventListener('start',         (e) => onStart(JSON.parse(e.data)));
-  es.addEventListener('source_start',  (e) => onSourceStart(JSON.parse(e.data)));
-  es.addEventListener('source_done',   (e) => onSourceDone(JSON.parse(e.data)));
-  es.addEventListener('resolve_start', (e) => onResolveStart(JSON.parse(e.data)));
-  es.addEventListener('resolve_done',  (e) => onResolveDone(JSON.parse(e.data)));
+  es.addEventListener('start',          (e) => onStart(JSON.parse(e.data)));
+  es.addEventListener('wildcard_start', () => onWildcardStart());
+  es.addEventListener('wildcard_done',  (e) => onWildcardDone(JSON.parse(e.data)));
+  es.addEventListener('source_start',   (e) => onSourceStart(JSON.parse(e.data)));
+  es.addEventListener('source_done',    (e) => onSourceDone(JSON.parse(e.data)));
+  es.addEventListener('resolve_start',  (e) => onResolveStart(JSON.parse(e.data)));
+  es.addEventListener('resolve_done',   (e) => onResolveDone(JSON.parse(e.data)));
   es.addEventListener('error', (e) => {
     // Could be a real server-sent 'error' event, or a connection drop.
     if (e.data) {

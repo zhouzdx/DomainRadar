@@ -4,8 +4,9 @@ from __future__ import annotations
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Iterable, Set
+from typing import Iterable, List, Set
 
+import dns.exception
 import dns.resolver
 
 from .base import BaseSource
@@ -23,20 +24,21 @@ def _make_resolver(timeout: float = 3.0) -> dns.resolver.Resolver:
     return r
 
 
-def _resolve(host: str, resolver: dns.resolver.Resolver) -> bool:
-    """Return True if ``host`` resolves to A or AAAA."""
+def _resolve_ips(host: str, resolver: dns.resolver.Resolver) -> List[str]:
+    """Return list of A / AAAA records for ``host`` (empty if unresolvable)."""
+    ips: List[str] = []
     for rtype in ("A", "AAAA"):
         try:
             answers = resolver.resolve(host, rtype)
-            if answers:
-                return True
         except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.resolver.NoNameservers):
             continue
         except dns.exception.Timeout:
             continue
         except Exception:
             continue
-    return False
+        for rdata in answers:
+            ips.append(rdata.to_text())
+    return ips
 
 
 class BruteForceSource(BaseSource):
@@ -48,9 +50,14 @@ class BruteForceSource(BaseSource):
         words: Iterable[str] | None = None,
         threads: int = 50,
         resolver_timeout: float = 3.0,
+        wildcard_ips: Iterable[str] | None = None,
     ) -> None:
         self.threads = max(1, int(threads))
         self.resolver_timeout = resolver_timeout
+        # Bogus IPs returned by a wildcard / hijacking DNS - injected by the
+        # scanner after wildcard detection. Hosts whose every IP is in this
+        # set are dropped as false positives.
+        self.wildcard_ips: Set[str] = set(wildcard_ips or ())
         if words is not None:
             self.words = [w.strip() for w in words if w and w.strip()]
         else:
@@ -73,12 +80,22 @@ class BruteForceSource(BaseSource):
         found: Set[str] = set()
 
         with ThreadPoolExecutor(max_workers=self.threads) as pool:
-            future_map = {pool.submit(_resolve, host, resolver): host for host in candidates}
+            future_map = {pool.submit(_resolve_ips, host, resolver): host for host in candidates}
             for future in as_completed(future_map):
                 host = future_map[future]
                 try:
-                    if future.result():
-                        found.add(host)
+                    ips = future.result()
                 except Exception:
                     continue
+                if not ips:
+                    continue
+                # Skip if EVERY resolved IP is in the wildcard / hijack set.
+                # If at least one IP is genuine the host is kept.
+                if self.wildcard_ips and all(ip in self.wildcard_ips for ip in ips):
+                    continue
+                found.add(host)
         return found
+
+
+# Re-export for back-compat with any external imports.
+__all__ = ["BruteForceSource"]
